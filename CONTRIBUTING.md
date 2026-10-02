@@ -3,8 +3,8 @@
 ## 开始之前
 
 ```bash
-git clone <你的 fork 地址>
-cd assassinate-king
+git clone https://github.com/nbtkwpzks9-sketch/kill-the-clove.git
+cd kill-the-clove
 python -m http.server 8000     # 本地起服务，打开 http://127.0.0.1:8000/index.html
 ```
 

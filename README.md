@@ -3,7 +3,8 @@
 一个纯前端（单页 canvas）的潜行小游戏：你是**皮蛋**，要尾随并刺杀背对你的**暮蝶**。
 原玩法来自经典 Flash 小游戏《刺杀国王》，本仓库是 HTML5 重制版。
 
-在线试玩（B站 Toy）：https://www.bilibili.com/toy/assassinate-king/index.html
+- 仓库：https://github.com/nbtkwpzks9-sketch/kill-the-clove
+- 在线试玩（B站 Toy）：https://www.bilibili.com/toy/assassinate-king/index.html
 
 ## 玩法
 

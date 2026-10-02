@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 本项目贡献者
+Copyright (c) 2026 kill-the-clove contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -19,6 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-注意：本 LICENSE 仅覆盖代码。assets/ 下的美术素材版权归各自权利人所有（角色形象
-取自 Riot Games《无畏契约》），不在本授权范围内，禁止商用。
