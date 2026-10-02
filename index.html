@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>刺杀暮蝶 · 潜行皮蛋</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; background: #1a1326; font-family: "Microsoft YaHei", "PingFang SC", sans-serif; overflow: hidden; }
+  #wrap { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  #game { position: relative; width: 100%; height: 100%; background: #1a1326; touch-action: none; user-select: none; }
+  canvas { display: block; width: 100%; height: 100%; }
+  .overlay {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center; color: #f3e9d2;
+    background: rgba(20,14,34,.82); padding: 24px; z-index: 10;
+  }
+  .overlay.hidden { display: none; }
+  .overlay h1 { font-size: clamp(28px, 7vw, 52px); color: #ffd76a; text-shadow: 0 3px 0 #5a3a12; margin-bottom: 10px; letter-spacing: 2px; }
+  .overlay p { font-size: clamp(14px, 3.6vw, 18px); line-height: 1.8; max-width: 460px; color: #d9cdb8; margin-bottom: 8px; }
+  .overlay .key { color: #ffd76a; font-weight: bold; }
+  .btn {
+    margin-top: 18px; padding: 12px 34px; font-size: 20px; border: none; border-radius: 30px;
+    background: linear-gradient(#ffd76a,#e6a52e); color: #4a2c08; font-weight: bold; cursor: pointer;
+    box-shadow: 0 4px 0 #8a5a12; transition: transform .05s;
+  }
+  .btn:active { transform: translateY(3px); box-shadow: 0 1px 0 #8a5a12; }
+  .hint { position: absolute; left: 0; right: 0; bottom: 14px; text-align: center; color: #9b8fb5; font-size: 13px; z-index: 5; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="game">
+    <canvas id="cv"></canvas>
+    <video id="vid" playsinline webkit-playsinline preload="auto"
+           style="display:none;position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000;z-index:20"></video>
+    <div id="startScreen" class="overlay">
+      <h1>刺杀暮蝶</h1>
+      <p>你是尾随暮蝶的皮蛋。趁<span class="key">暮蝶背对你</span>时，<span class="key">按住鼠标 / 空格</span>悄悄靠近。</p>
+      <p>暮蝶一<span class="key">回头（⚠）</span>，必须立刻松手停住——被发现就扔进地牢！</p>
+      <p>分两段潜行：先穿过<span class="key">披萨店街道（图一）</span>，再进入<span class="key">后院（图二）</span>——暮蝶始终在后院等你。</p>
+      <p>在后院里，趁<span class="key">暮蝶背对你</span>时<span class="key">按住鼠标 / 空格</span>悄悄靠近；他一<span class="key">回头（⚠）</span>必须立刻松手，否则被扔进地牢！摸到背后即可刺杀。</p>
+      <button class="btn" id="startBtn">开始潜行</button>
+    </div>
+    <div id="endScreen" class="overlay hidden">
+      <h1 id="endTitle">被发现了！</h1>
+      <p id="endMsg"></p>
+      <button class="btn" id="againBtn">再来一次</button>
+    </div>
+    <div class="hint">按住 = 前进 · 松手 = 停住 · 图二里暮蝶回头时千万别动</div>
+  </div>
+</div>
+<script>
+(function () {
+  "use strict";
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const W = 960, H = 540;   // 逻辑 16:9；渲染时 cover 铺满整个窗口（只裁切，绝不拉伸）
+  let vw = 0, vh = 0, worldT = [1, 0, 0, 1, 0, 0], uiT = [1, 0, 0, 1, 0, 0];
+  function resize() {
+    // 兜底：内嵌 WebView 可能初始 innerWidth=0，用 documentElement 兜底，最小 320x240
+    const w = Math.max(window.innerWidth || 0, document.documentElement.clientWidth || 0, 320);
+    const h = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0, 240);
+    vw = cv.width = w;
+    vh = cv.height = h;
+    const s = Math.max(vw / W, vh / H);              // 世界：cover 铺满，不变形
+    let tx = (vw - W * s) / 2, ty = (vh - H * s) / 2;
+    if (H * s > vh) ty = vh - H * s;                 // 上下要裁时保地面（底对齐，裁天空）
+    worldT = [s, 0, 0, s, tx, ty];
+    const u = Math.min(vw / W, vh / H);              // UI：完整可见
+    uiT = [u, 0, 0, u, (vw - W * u) / 2, (vh - H * u) / 2];
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---------- audio (WebAudio, no external files) ----------
+  let actx = null;
+  function beep(freq, dur, type, vol) {
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = type || 'square'; o.frequency.value = freq;
+      g.gain.value = vol || 0.06;
+      o.connect(g); g.connect(actx.destination);
+      const t = actx.currentTime;
+      o.start(t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.stop(t + dur);
+    } catch (e) {}
+  }
+  const sfx = {
+    turn:  () => beep(880, 0.12, 'square', 0.05),
+    caught:() => { beep(160,0.35,'sawtooth',0.08); setTimeout(()=>beep(110,0.4,'sawtooth',0.08),120); },
+    win:   () => { [523,659,784,1047].forEach((f,i)=>setTimeout(()=>beep(f,0.18,'triangle',0.07),i*110)); },
+    step:  () => beep(220, 0.04, 'sine', 0.02)
+  };
+
+  // ---------- scene backgrounds (two separate images, original aspect ratio) ----------
+  const bgImgs = { 1: new Image(), 2: new Image() };
+  const bgLoaded = { 1: false, 2: false };
+  bgImgs[1].src = 'assets/scene1.jpg';
+  bgImgs[2].src = 'assets/scene2.jpg';
+  bgImgs[1].onload = () => bgLoaded[1] = true;
+  bgImgs[2].onload = () => bgLoaded[2] = true;
+
+  // ---------- character sprites ----------
+  // 暮蝶：睡觉态 = 背对皮蛋(朝右)；警觉态 = 回头看向皮蛋(朝左，持枪)
+  // 皮蛋：静止 = 潜行；按住前进 = 走路 GIF
+  const CH = {
+    kingSleep: new Image(), kingAlert: new Image(),
+    spySneak: new Image(),  spySheet: new Image()
+  };
+  const chLoaded = {};
+  [['kingSleep', 'assets/king_sleep.png'], ['kingAlert', 'assets/king_alert.png'],
+   ['spySneak', 'assets/spy_sneak_cut.png'], ['spySheet', 'assets/spy_walk_sheet.png']]
+    .forEach(function (p) {
+      CH[p[0]].src = p[1];
+      CH[p[0]].onload = () => chLoaded[p[0]] = true;
+    });
+
+  // 走路动画：3 帧精灵表，逐帧播放（不依赖 GIF 自动播放）
+  // 帧保持原始 426x240（16:9）画幅，只把背景抠成透明
+  const SHEET_N = 3, SHEET_FW = 426, SHEET_FH = 240, FRAME_MS = 130;
+  const SPY_BOTTOM = 0.792;   // 角色脚底在画幅中的纵向比例（用于贴地）
+
+  const FOOT_Y = Math.round(H * 0.92);  // 地面：对齐场景图里的人行道/后院地面（脚底贴地不悬空）
+  const SPY_W = 240, SPY_H = 135;  // 皮蛋显示尺寸，严格 16:9（240:135）
+  const KING_H = 210;              // 暮蝶贴图高度
+  const KING_W = 136;              // 暮蝶贴图宽度（睡觉图 363:560 比例）
+  function spriteW(img, h) {       // 按原始比例算宽度
+    return (img.naturalWidth || img.width) / (img.naturalHeight || img.height) * h;
+  }
+  // 画幅顶边：让脚底(画幅 SPY_BOTTOM 处)落在地面 FOOT_Y 上
+  function spyTop(h) { return FOOT_Y - h * SPY_BOTTOM; }
+  // 精灵表取第 i 帧，按原始 16:9 比例贴地绘制
+  function drawFrame(img, i, cx, w, h) {
+    ctx.drawImage(img, i * SHEET_FW, 0, SHEET_FW, SHEET_FH,
+                  cx - w / 2, spyTop(h), w, h);
+  }
+  function drawSprite(img, cx, h, w, flip) {
+    if (flip) {
+      ctx.save();
+      ctx.translate(cx, FOOT_Y);
+      ctx.scale(-1, 1);
+      ctx.drawImage(img, -w / 2, -h, w, h);
+      ctx.restore();
+    } else {
+      ctx.drawImage(img, cx - w / 2, FOOT_Y - h, w, h);
+    }
+  }
+
+  // draw an image covering the canvas while preserving its original aspect ratio (no stretch)
+  function drawFit(img, w, h) {
+    const ir = img.width / img.height, tr = w / h;
+    let dw, dh;
+    if (ir > tr) { dh = h; dw = h * ir; } else { dw = w; dh = w / ir; }
+    const dx = (w - dw) / 2, dy = (h - dh) / 2;
+    ctx.drawImage(img, dx, dy, dw, dh);
+  }
+
+  // ---------- game state ----------
+  const G = {
+    state: 'menu',       // menu | playing | transition | caught | win | over
+    phase: 1,            // 1 = walk through scene1, 2 = assassinate in scene2
+    lives: 3,
+    king: null,
+    assassin: null,
+    exitX: 0,
+    stabX: 0,
+    msg: ''
+  };
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+
+  function spawnPhase(p) {
+    G.phase = p;
+    G.assassin = {
+      x: 140,
+      y: FOOT_Y,
+      r: SPY_W / 2,
+      speed: 160,
+      holding: false,
+      moving: false,
+      stepT: 0
+    };
+    if (p === 1) {
+      // scene1: walk across the pizzeria street, no king yet
+      G.king = null;
+      G.exitX = W - 110;
+    } else {
+      // scene2: the king is here, waiting in the courtyard
+      G.king = {
+        x: W - 110,
+        y: FOOT_Y,
+        r: KING_W / 2,
+        state: 'away',
+        t: rand(1.6, 3.0),
+        awayMin: 0.9, awayMax: 2.4,
+        faceMin: 0.7, faceMax: 1.1,
+        turnDur: 0.30
+      };
+      G.stabX = G.king.x - G.king.r - G.assassin.r + 6;
+    }
+  }
+
+  function startGame() {
+    G.lives = 3; G.state = 'playing';
+    spawnPhase(1);
+    hide(startScreen); hide(endScreen);
+  }
+
+  // ---------- input ----------
+  let holding = false;
+  function setHold(v) {
+    holding = v;
+    if (v && actx && actx.state === 'suspended') actx.resume();
+    if (G.state === 'playing' && G.assassin) G.assassin.holding = v;
+  }
+  cv.addEventListener('pointerdown', e => { e.preventDefault(); setHold(true); });
+  window.addEventListener('pointerup',   () => setHold(false));
+  window.addEventListener('pointercancel', () => setHold(false));
+  window.addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); setHold(true); } });
+  window.addEventListener('keyup',   e => { if (e.code === 'Space') setHold(false); });
+
+  // ---------- update ----------
+  function update(dt) {
+    if (G.state !== 'playing') return;
+    const a = G.assassin;
+
+    // assassin movement (hold to advance)
+    a.moving = false;
+    if (a.holding) {
+      a.x += a.speed * dt;
+      a.moving = true;
+      a.stepT -= dt;
+      if (a.stepT <= 0) { sfx.step(); a.stepT = 0.22; }
+    }
+
+    if (G.phase === 1) {
+      // walk through scene1; reach the end -> enter scene2
+      if (a.x >= G.exitX) {
+        a.x = G.exitX;
+        G.state = 'transition';
+        G.msg = '🚪 进入后院……';
+        setTimeout(() => { if (G.state === 'transition') { spawnPhase(2); G.state = 'playing'; } }, 900);
+      }
+      return;
+    }
+
+    // phase 2: king state machine
+    const k = G.king;
+    k.t -= dt;
+    if (k.state === 'away') {
+      if (k.t <= 0) { k.state = 'turning_face'; k.t = k.turnDur; sfx.turn(); }
+    } else if (k.state === 'turning_face') {
+      if (k.t <= 0) { k.state = 'face'; k.t = rand(k.faceMin, k.faceMax); }
+    } else if (k.state === 'face') {
+      if (a.moving) return caught();
+      if (k.t <= 0) { k.state = 'turning_away'; k.t = k.turnDur; }
+    } else if (k.state === 'turning_away') {
+      if (k.t <= 0) { k.state = 'away'; k.t = rand(k.awayMin, k.awayMax); }
+    }
+
+    // reached the king's back
+    if (a.x >= G.stabX) {
+      if (k.state === 'face' || k.state === 'turning_face') return caught();
+      return winLevel();
+    }
+  }
+
+  function caught() {
+    G.lives--;
+    G.state = 'caught';
+    sfx.caught();
+    if (G.lives <= 0) {
+      G.msg = '你被侍卫拖进了地牢，再也没能出来……';
+      setTimeout(() => playVideo('fail.mp4', showOver), 700);   // 刺杀失败
+    } else {
+      G.msg = '暮蝶回头看见了你！被扔进地牢（剩余 ' + G.lives + ' 条命）';
+      setTimeout(() => { if (G.state === 'caught') { spawnPhase(2); G.state = 'playing'; } }, 900);
+    }
+  }
+
+  function winLevel() {
+    G.state = 'win';
+    sfx.win();
+    G.msg = '你潜入后院，一刀刺死了暮蝶！';
+    setTimeout(() => playVideo('win.mp4', showOver), 1300);   // 刺杀成功
+  }
+
+  function showOver() {
+    G.state = 'over';
+    endTitle.textContent = G.lives > 0 ? '通关！' : '游戏结束';
+    endMsg.textContent = G.msg;
+    show(endScreen);
+  }
+
+  // ---------- render ----------
+  function draw() {
+    // 清屏（物理像素），再切到世界 cover 变换
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#1a1326';
+    ctx.fillRect(0, 0, cv.width, cv.height);
+    ctx.setTransform(worldT[0], worldT[1], worldT[2], worldT[3], worldT[4], worldT[5]);
+    // background: the current scene image, full & original ratio (cover)
+    if (bgLoaded[G.phase]) {
+      drawFit(bgImgs[G.phase], W, H);
+      ctx.fillStyle = 'rgba(0,0,0,0.15)';
+      ctx.fillRect(0, 0, W, H);
+    } else {
+      const g = ctx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, '#3a2a55'); g.addColorStop(1, '#1d1430');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = '#2a1d40'; ctx.fillRect(0, H - 120, W, 120);
+    }
+    if (G.state === 'menu') return;
+
+    const a = G.assassin;
+    const k = G.king;
+
+    // king — only exists in scene2（睡觉态=背对皮蛋，警觉态=回头）
+    if (G.phase === 2 && k) {
+      const facing = (k.state === 'face' || k.state === 'turning_face');
+      const kKey = facing ? 'kingAlert' : 'kingSleep';
+      if (chLoaded[kKey]) {
+        const img = facing ? CH.kingAlert : CH.kingSleep;
+        drawSprite(img, k.x, KING_H, spriteW(img, KING_H), false);
+      } else {
+        ctx.fillStyle = '#c8a24a';
+        ctx.fillRect(k.x - k.r, FOOT_Y - KING_H, k.r * 2, KING_H);
+      }
+      if (k.state === 'face') {
+        ctx.fillStyle = '#ff4d4d'; ctx.font = '34px sans-serif';
+        ctx.fillText('⚠', k.x, k.y - k.r - 22);
+        ctx.fillStyle = 'rgba(255,60,60,0.10)'; ctx.fillRect(0, 0, W, H);
+      } else if (k.state === 'turning_face') {
+        ctx.fillStyle = '#ffcf3a'; ctx.font = '30px sans-serif';
+        ctx.fillText('?', k.x, k.y - k.r - 22);
+      } else {
+        ctx.fillStyle = '#7ee08a'; ctx.font = '26px sans-serif';
+        ctx.fillText('💤', k.x, k.y - k.r - 20);
+      }
+    }
+
+    // assassin（静止=潜行图，按住前进=走路动画，均贴地）
+    if (a.moving && chLoaded['spySheet']) {
+      const i = Math.floor(performance.now() / FRAME_MS) % SHEET_N;
+      drawFrame(CH.spySheet, i, a.x, SPY_W, SPY_H);
+    } else if (chLoaded['spySneak']) {
+      const sn = CH.spySneak;
+      const sw = spriteW(sn, SPY_H);   // 16:9 -> 240
+      ctx.drawImage(sn, a.x - sw / 2, spyTop(SPY_H), sw, SPY_H);
+    } else {
+      ctx.fillStyle = '#2b2b3d';
+      ctx.fillRect(a.x - a.r, FOOT_Y - SPY_H, SPY_W, SPY_H);
+    }
+
+    // HUD（UI 层：fit 变换，任何窗口比例下完整可见）
+    ctx.setTransform(uiT[0], uiT[1], uiT[2], uiT[3], uiT[4], uiT[5]);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#ffd76a'; ctx.font = 'bold 22px sans-serif';
+    const label = G.phase === 1 ? '🚶 潜入披萨店（图一）' : '🗡 刺杀暮蝶（图二）';
+    ctx.fillText(label, 20, 34);
+    // lives
+    ctx.textAlign = 'right';
+    ctx.font = '22px sans-serif';
+    let hearts = '';
+    for (let i = 0; i < G.lives; i++) hearts += '❤';
+    for (let i = G.lives; i < 3; i++) hearts += '🖤';
+    ctx.fillText(hearts, W - 20, 34);
+    // progress bar
+    const p = G.phase === 1
+      ? Math.max(0, Math.min(1, a.x / G.exitX))
+      : Math.max(0, Math.min(1, (a.x - 140) / (G.stabX - 140)));
+    ctx.fillStyle = 'rgba(0,0,0,0.4)'; ctx.fillRect(20, 50, 240, 14);
+    ctx.fillStyle = '#ffd76a'; ctx.fillRect(20, 50, 240 * p, 14);
+    ctx.fillStyle = '#fff'; ctx.font = '12px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText('潜行进度', 20, 78);
+
+    // transient banners
+    if (G.state === 'transition') {
+      ctx.fillStyle = 'rgba(255,215,106,0.95)'; ctx.font = 'bold 40px sans-serif';
+      ctx.textAlign = 'center'; ctx.fillText(G.msg, W / 2, H / 2);
+    } else if (G.state === 'caught') {
+      ctx.fillStyle = 'rgba(255,60,60,0.92)'; ctx.font = 'bold 40px sans-serif';
+      ctx.textAlign = 'center'; ctx.fillText('被暮蝶发现了！', W / 2, H / 2);
+    } else if (G.state === 'win') {
+      ctx.fillStyle = 'rgba(120,230,140,0.95)'; ctx.font = 'bold 40px sans-serif';
+      ctx.textAlign = 'center'; ctx.fillText('刺杀成功！', W / 2, H / 2);
+    }
+  }
+
+  // ---------- loop ----------
+  let last = performance.now();
+  function loop(now) {
+    // 每帧自检窗口尺寸（旋转/缩放/WebView 初始为 0 时自动恢复），不依赖 resize 事件
+    const iw = Math.max(window.innerWidth || 0, document.documentElement.clientWidth || 0, 320);
+    const ih = Math.max(window.innerHeight || 0, document.documentElement.clientHeight || 0, 240);
+    if (iw !== vw || ih !== vh) resize();
+    let dt = (now - last) / 1000; last = now;
+    if (dt > 0.05) dt = 0.05;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // ---------- video cutscenes ----------
+  const vid = document.getElementById('vid');
+  let vidDone = null;
+  function playVideo(file, onDone) {
+    vidDone = () => {
+      if (!vidDone) return;
+      vidDone = null;
+      vid.pause();
+      vid.style.display = 'none';
+      if (onDone) onDone();
+    };
+    try {
+      vid.src = 'assets/' + file;
+      vid.currentTime = 0;
+      vid.muted = false;
+      vid.style.display = 'block';
+      vid.onended = vidDone;
+      vid.onerror = vidDone;
+      const p = vid.play();
+      if (p && p.catch) p.catch(() => {           // 自动播放被拦截：静音重试
+        vid.muted = true;
+        const q = vid.play();
+        if (q && q.catch) q.catch(() => vidDone && vidDone());
+      });
+    } catch (e) { vidDone && vidDone(); }
+  }
+  vid.addEventListener('click', () => vidDone && vidDone());   // 点视频跳过
+
+  // ---------- UI ----------
+  const startScreen = document.getElementById('startScreen');
+  const endScreen = document.getElementById('endScreen');
+  const endTitle = document.getElementById('endTitle');
+  const endMsg = document.getElementById('endMsg');
+  function show(el){ el.classList.remove('hidden'); }
+  function hide(el){ el.classList.add('hidden'); }
+  document.getElementById('startBtn').addEventListener('click', function () {
+    hide(startScreen);
+    playVideo('intro.mp4', startGame);   // 开场视频，播完（或点击跳过）进入游戏
+  });
+  document.getElementById('againBtn').addEventListener('click', startGame);
+})();
+</script>
+</body>
+</html>

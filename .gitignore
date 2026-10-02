@@ -1,0 +1,9 @@
+# 本地调试产物
+_qa_*.png
+__pycache__/
+*.pyc
+
+# 编辑器 / 系统
+.vscode/
+.DS_Store
+Thumbs.db
